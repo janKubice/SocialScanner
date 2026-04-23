@@ -78,3 +78,27 @@ Logika musí být striktně izolována do definovaných vrstev. Křížové záv
 * `load/`: Databázové transakce. Zákaz transformační logiky.
 * `analyze/`: Agregace, detekce trendů a anomálií pro analytické výstupy.
 * `utils/`: Sdílené I/O, logování a pomocné funkce.
+
+
+## 6. Infrastruktura a nasazení (Serverless)
+Architektura „Serverless first“ minimalizuje fixní provozní náklady a eliminuje nutnost manuální správy operačních systémů.
+
+* **Databáze (Supabase / PostgreSQL):**
+  Centrální úložiště strukturovaných dat. Zajišťuje ukládání surových textů a jejich vektorových reprezentací (embeddingů) pomocí nativního rozšíření pgvector. Přístupové údaje (URL, anon/public klíč) se distribuují výhradně přes proměnné prostředí.
+* **Výpočetní server (Railway):**
+  Prostředí pro kontinuální běh aplikačních rozhraní (API), naslouchání webhookům a exekuci plánovaných úloh (Cron). Podporuje přímou integraci s verzovacím systémem pro automatický deployment při každém odeslání kódu (git push).
+* **Strojové učení a ETL (Modal):**
+  Dedikovaná platforma pro asynchronní a výpočetně náročné úlohy, jako je hromadné zpracování tisíců záznamů přes LLM. Umožňuje dynamickou alokaci hardwarových zdrojů (včetně GPU) s účtováním pouze za exekuční čas.
+* **Správa citlivých údajů:**
+  Lokální soubor `.env` je v produkčním prostředí striktně nahrazen nativními správci tajných kódů (Secrets) v ovládacích panelech příslušných služeb (Railway, Modal, Supabase).
+
+Následující modul modeluje odhadovanou propustnost a nákladovost infrastruktury.
+
+## 7. Architektura systému a Databáze
+
+Vizualizace naší data pipeline a struktury databáze:
+
+![Schéma architektury](docs/architecture.png)
+![Schéma databáze](docs/db_schema.png)
+
+Pro detailní popis tabulek nahlédněte do [dokumentace databáze](docs/database.md).
