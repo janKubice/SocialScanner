@@ -1251,6 +1251,84 @@ Výsledek:
 - [ ] report lze později posílat e-mailem,
 - [ ] report je stručný a použitelný.
 
+---
+
+## Doporučené pořadí práce v nejbližších dnech
+
+### Den 1: Repo a konfigurace
+
+- [ ] upravit README,
+- [ ] vložit dokumentaci do `docs/`,
+- [ ] vytvořit `.env.example`,
+- [ ] zkontrolovat `.gitignore`,
+- [ ] zkontrolovat `src/config.py`,
+- [ ] zprovoznit logging,
+- [ ] ověřit `uv sync`, `ruff`, `pytest`.
+
+---
+
+### Den 2: Databáze
+
+- [ ] založit Supabase projekt,
+- [ ] zapnout `pgcrypto`,
+- [ ] zapnout `vector`,
+- [ ] aplikovat minimální DDL,
+- [ ] vytvořit testovací tenant,
+- [ ] vytvořit databázového klienta,
+- [ ] ověřit připojení z lokální aplikace.
+
+---
+
+### Den 3: První zdroj
+
+- [ ] vybrat první jednoduchý RSS zdroj,
+- [ ] zapsat ho do `docs/data_sources.md`,
+- [ ] vložit ho do `data_sources`,
+- [ ] implementovat RSS ingest,
+- [ ] vytvořit fixture test,
+- [ ] převést RSS položky na interní dokumenty.
+
+---
+
+### Den 4: Transformace
+
+- [ ] normalizovat URL,
+- [ ] čistit text,
+- [ ] vytvořit content hash,
+- [ ] doplnit language code,
+- [ ] připravit dokumenty pro uložení,
+- [ ] otestovat deduplikaci.
+
+---
+
+### Den 5: Load pipeline
+
+- [ ] vytvořit `collection_run`,
+- [ ] ukládat dokumenty do `raw_social_data`,
+- [ ] řešit duplicity,
+- [ ] zapisovat `processing_events`,
+- [ ] vytvořit první end-to-end běh.
+
+---
+
+### Den 6: Entity
+
+- [ ] vložit první sledované entity,
+- [ ] přidat aliasy,
+- [ ] implementovat entity matching,
+- [ ] ukládat `document_entities`,
+- [ ] otestovat entity matching na reálných textech.
+
+---
+
+### Den 7: Analýza a první alert
+
+- [ ] spočítat zmínky podle entity,
+- [ ] vytvořit první `trend_snapshot`,
+- [ ] přidat jednoduchý trend score,
+- [ ] vytvořit první alert rule,
+- [ ] uložit alert do tabulky `alerts`,
+- [ ] připravit jednoduchý výpis otevřených alertů.
 
 ---
 
