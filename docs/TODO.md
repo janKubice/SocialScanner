@@ -1,1397 +1,873 @@
-# SocialScanner TODO: Implementační plán krok za krokem
+# SocialScanner TODO
 
-Tento dokument popisuje doporučený postup vývoje projektu **SocialScanner** od současného stavu až po první funkční MVP.
-
-Cílem není dělat vše najednou. Cílem je postupovat po malých, ověřitelných blocích, aby byl projekt stabilní, rozšiřitelný a technicky čistý.
+Cíl: postavit systém tak, aby od začátku běžel automatizovaně bez ručního spouštění pipeline. Lokální prostředí slouží pouze pro vývoj a debug. Produkční běh musí být řízen přes Railway / Modal / Supabase / plánované úlohy / fronty / automatické reporty.
 
 ---
 
-## Hlavní pravidlo postupu
+## 0. Základní pravidla projektu
 
-Každý krok by měl skončit ověřitelným výsledkem.
-
-Nepokračovat dál, dokud aktuální část:
-
-- funguje lokálně,
-- má základní test,
-- je zdokumentovaná,
-- nemíchá odpovědnosti mezi vrstvami,
-- neobsahuje secrets v repozitáři.
+- [ ] Neprovozovat produkční pipeline ručně z lokálního počítače.
+- [ ] Všechny produkční secrets držet pouze v Railway / Modal / Supabase secrets.
+- [ ] Každý krok pipeline musí být idempotentní.
+- [ ] Každý job musí ukládat stav běhu do databáze.
+- [ ] Každý job musí mít logování, error handling a retry strategii.
+- [ ] Každý externí zdroj musí mít vlastní konfiguraci v databázi.
+- [ ] Žádný token, API klíč ani service role key nesmí být v repozitáři.
+- [ ] Každá část systému musí jít znovu spustit bez rozbití dat.
+- [ ] Dashboard a reporty mají číst pouze uložená data, nevolat drahé API přímo.
+- [ ] LLM volání používat jen tam, kde levnější pravidla nestačí.
 
 ---
 
-## Fáze 0: Úklid repozitáře a základní standardy
+## 1. Repozitář a základní struktura
 
-### 0.1 Sjednotit strukturu projektu
-
-Vytvořit nebo zkontrolovat strukturu:
+- [ ] Sjednotit strukturu projektu.
 
 ```text
-social-scanner/
-├── docs/
-├── src/
-│   ├── ingest/
-│   ├── transform/
-│   ├── load/
-│   ├── analyze/
-│   ├── utils/
-│   ├── config.py
-│   └── main.py
-├── tests/
-├── .env.example
-├── .gitignore
-├── pyproject.toml
-├── uv.lock
-├── README.md
-└── TODO.md
+src/
+├── analyze/
+├── config.py
+├── ingest/
+├── jobs/
+├── load/
+├── reports/
+├── transform/
+├── utils/
+└── main.py
 ```
 
-Výsledek:
-
-- [ ] projekt má jasnou adresářovou strukturu,
-- [ ] každá vrstva má vlastní složku,
-- [ ] dokumentace je ve složce `docs/`,
-- [ ] repozitář neobsahuje citlivé soubory.
+- [ ] Přidat adresář `src/jobs/` pro produkční spouštěcí skripty.
+- [ ] Přidat adresář `src/reports/` pro generování denních a týdenních reportů.
+- [ ] Přidat adresář `migrations/` nebo jasně určit, kde budou SQL migrace.
+- [ ] Přidat `.env.example` bez skutečných hodnot.
+- [ ] Přidat `.gitignore` pro `.env`, `.venv`, lokální výstupy, cache a logy.
+- [ ] Ověřit, že `uv sync` funguje na čistém repozitáři.
+- [ ] Ověřit, že `uv run ruff check . --fix` projde bez chyb.
+- [ ] Ověřit, že `uv run ruff format .` projde bez chyb.
+- [ ] Ověřit, že `uv run pytest` projde i při prázdném/minimálním testovacím základu.
 
 ---
 
-### 0.2 Zkontrolovat `.gitignore`
+## 2. Konfigurace aplikace
 
-Doporučený obsah:
-
-```gitignore
-.env
-.venv/
-__pycache__/
-.pytest_cache/
-.ruff_cache/
-*.pyc
-.DS_Store
-.idea/
-.vscode/
-```
-
-Výsledek:
-
-- [ ] `.env` je ignorovaný,
-- [ ] `.venv` je ignorovaný,
-- [ ] cache soubory jsou ignorované,
-- [ ] IDE soubory nejsou commitované.
-
----
-
-### 0.3 Vytvořit `.env.example`
-
-Vytvořit soubor `.env.example`:
+- [ ] Upravit `src/config.py` tak, aby četl konfiguraci přes Pydantic settings.
+- [ ] Používat uppercase názvy environment variables.
 
 ```text
-SUPABASE_URL="https://[PROJECT-ID].supabase.co"
-SUPABASE_KEY="[SERVICE-ROLE-KEY]"
-OPENAI_API_KEY="sk-[TOKEN]"
-APIFY_TOKEN="apify_[TOKEN]"
-ENVIRONMENT="local"
-LOG_LEVEL="INFO"
+ENVIRONMENT=local|staging|production
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_ANON_KEY=
+OPENAI_API_KEY=
+APIFY_TOKEN=
+DATABASE_URL=
+LOG_LEVEL=INFO
+PIPELINE_BATCH_SIZE=100
+DEFAULT_LANGUAGE=cs
 ```
 
-Výsledek:
+- [ ] Přidat validaci povinných proměnných.
+- [ ] Přidat rozlišení `local`, `staging`, `production`.
+- [ ] Přidat bezpečné maskování secrets v logu.
+- [ ] Přidat testy pro načítání konfigurace.
 
-- [ ] existuje `.env.example`,
-- [ ] neobsahuje skutečné secrets,
-- [ ] odpovídá tomu, co očekává `src/config.py`.
+Definition of done:
 
----
-
-### 0.4 Ověřit základní příkazy
-
-Spustit:
-
-```powershell
-uv sync
-uv run ruff check . --fix
-uv run ruff format .
-uv run pytest
-```
-
-Výsledek:
-
-- [ ] závislosti se nainstalují,
-- [ ] linting projde,
-- [ ] formátování projde,
-- [ ] testy projdou nebo existuje jasný seznam chybějících testů.
+- [ ] Aplikace spadne s jasnou chybou, pokud chybí povinný secret.
+- [ ] Produkční secrets se nikdy nevypisují do logu.
+- [ ] Lokální `.env` není potřeba v produkci.
 
 ---
 
-## Fáze 1: Konfigurace a základní aplikační jádro
+## 3. Databáze a migrace
 
-### 1.1 Dokončit `src/config.py`
-
-Cíl:
-
-- centralizované načítání konfigurace,
-- validace povinných proměnných,
-- přehledné chybové hlášky,
-- žádné čtení `.env` přímo v jiných částech aplikace.
-
-Doporučený model:
-
-```text
-Settings
-├── supabase_url
-├── supabase_key
-├── openai_api_key
-├── apify_token
-├── environment
-└── log_level
-```
-
-Výsledek:
-
-- [ ] konfigurace se načítá přes jednu třídu/funkci,
-- [ ] chybějící proměnná vyvolá srozumitelnou chybu,
-- [ ] existuje test pro načtení konfigurace,
-- [ ] README odpovídá reálným názvům proměnných.
-
----
-
-### 1.2 Přidat základní logging
-
-Vytvořit například:
-
-```text
-src/utils/logging.py
-```
-
-Požadavky:
-
-- jednotný formát logů,
-- log level podle konfigurace,
-- žádné logování API klíčů,
-- možnost používat logger napříč moduly.
-
-Výsledek:
-
-- [ ] aplikace loguje start,
-- [ ] aplikace loguje chyby,
-- [ ] log level lze změnit přes `.env`,
-- [ ] secrets se v logu neobjevují.
-
----
-
-### 1.3 Upravit `src/main.py`
-
-Cíl:
-
-- `main.py` má pouze spouštěcí logiku,
-- neobsahuje implementaci celé pipeline,
-- volá samostatné moduly.
-
-Doporučený tok:
-
-```text
-load settings
-setup logging
-start pipeline
-handle errors
-exit cleanly
-```
-
-Výsledek:
-
-- [ ] `uv run python src/main.py` funguje,
-- [ ] při chybě konfigurace aplikace skončí čitelně,
-- [ ] hlavní logika je delegována do samostatných funkcí.
-
----
-
-## Fáze 2: Databáze a Supabase
-
-### 2.1 Založit Supabase projekt
-
-Cíl:
-
-- vytvořit Supabase projekt,
-- získat URL,
-- získat service role key,
-- nastavit lokální `.env`.
-
-Výsledek:
-
-- [ ] Supabase projekt existuje,
-- [ ] `SUPABASE_URL` je nastavený,
-- [ ] `SUPABASE_KEY` je nastavený lokálně,
-- [ ] klíče nejsou v repozitáři.
-
----
-
-### 2.2 Zapnout potřebná PostgreSQL rozšíření
-
-Spustit v Supabase SQL editoru:
+- [ ] Vytvořit finální SQL migraci podle `docs/database.md`.
+- [ ] Zapnout potřebná PostgreSQL rozšíření.
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-Výsledek:
+- [ ] Vytvořit tabulky:
+  - [ ] `tenants`
+  - [ ] `tenant_members`
+  - [ ] `data_sources`
+  - [ ] `collection_runs`
+  - [ ] `raw_social_data`
+  - [ ] `entities`
+  - [ ] `entity_aliases`
+  - [ ] `document_entities`
+  - [ ] `topics`
+  - [ ] `document_topics`
+  - [ ] `document_relations`
+  - [ ] `trend_snapshots`
+  - [ ] `alerts`
+  - [ ] `processing_events`
 
-- [ ] `pgcrypto` je dostupné,
-- [ ] `vector` je dostupné,
-- [ ] databáze podporuje UUID a embeddingy.
+- [ ] Přidat základní indexy.
+- [ ] Přidat unique indexy pro deduplikaci.
+- [ ] Přidat `updated_at` trigger.
+- [ ] Zapnout RLS na tabulkách.
+- [ ] Přidat minimální RLS policies pro budoucí frontend.
+- [ ] Připravit seed pro prvního testovacího tenanta.
+- [ ] Připravit seed pro první sledované entity.
+
+Definition of done:
+
+- [ ] Databázi lze vytvořit z nuly jedním postupem.
+- [ ] Migrace lze aplikovat opakovatelně.
+- [ ] Unikátní indexy brání duplicitám.
+- [ ] První tenant a entity existují bez ručního klikání v databázi.
 
 ---
 
-### 2.3 Aplikovat databázové schéma
+## 4. Databázová access vrstva
 
-Použít schéma z:
+- [ ] Vytvořit `src/load/db.py`.
+- [ ] Vytvořit centrální Supabase/PostgreSQL klient.
+- [ ] Vytvořit repository funkce pro:
+  - [ ] tenants,
+  - [ ] data sources,
+  - [ ] collection runs,
+  - [ ] raw social data,
+  - [ ] entities,
+  - [ ] document entities,
+  - [ ] topics,
+  - [ ] trend snapshots,
+  - [ ] alerts,
+  - [ ] processing events.
+
+- [ ] Přidat helper pro `insert_collection_run_start`.
+- [ ] Přidat helper pro `finish_collection_run_success`.
+- [ ] Přidat helper pro `finish_collection_run_error`.
+- [ ] Přidat helper pro `log_processing_event`.
+- [ ] Přidat upsert pro `raw_social_data` podle `external_id`, `canonical_url` nebo `content_hash`.
+
+Definition of done:
+
+- [ ] Ingest modul nikdy nepracuje přímo s SQL mimo load vrstvu.
+- [ ] Transform modul nikdy nezapisuje přímo do DB mimo load vrstvu.
+- [ ] Každý produkční job umí zapsat svůj stav do databáze.
+
+---
+
+## 5. Logging a observability
+
+- [ ] Vytvořit `src/utils/logging.py`.
+- [ ] Nastavit strukturované logování.
+- [ ] Každý log musí obsahovat:
+  - [ ] environment,
+  - [ ] job name,
+  - [ ] tenant id, pokud existuje,
+  - [ ] source id, pokud existuje,
+  - [ ] collection run id, pokud existuje.
+
+- [ ] Přidat logování startu a konce každého jobu.
+- [ ] Přidat logování počtu zpracovaných záznamů.
+- [ ] Přidat logování chyb bez secrets.
+- [ ] Přidat tabulkové logování do `processing_events`.
+- [ ] Přidat health check endpoint nebo health check job.
+
+Definition of done:
+
+- [ ] Z logů lze zjistit, co běželo, kdy to běželo a proč to spadlo.
+- [ ] Kritická chyba se uloží do databáze.
+- [ ] Secrets nejsou v logu.
+
+---
+
+## 6. Railway základ
+
+- [ ] Vytvořit Railway projekt pro `staging`.
+- [ ] Vytvořit Railway projekt nebo prostředí pro `production`.
+- [ ] Napojit Railway na GitHub repozitář.
+- [ ] Nastavit automatický deployment po pushi do hlavní větve nebo deployment větve.
+- [ ] Přidat Railway variables:
+  - [ ] `ENVIRONMENT`
+  - [ ] `SUPABASE_URL`
+  - [ ] `SUPABASE_SERVICE_ROLE_KEY`
+  - [ ] `OPENAI_API_KEY`
+  - [ ] `APIFY_TOKEN`
+  - [ ] `LOG_LEVEL`
+  - [ ] `PIPELINE_BATCH_SIZE`
+
+- [ ] Přidat Railway build/start command.
+- [ ] Přidat jednoduchý health command.
+- [ ] Ověřit, že Railway umí spustit `uv run python src/main.py`.
+- [ ] Přidat samostatné Railway služby nebo joby pro plánované úlohy.
+
+Definition of done:
+
+- [ ] Po pushi se aplikace sama deployne.
+- [ ] Produkční běh nevyžaduje lokální počítač.
+- [ ] Secrets jsou pouze v Railway variables.
+
+---
+
+## 7. Produkční job entrypointy
+
+Vytvořit samostatné skripty v `src/jobs/`.
+
+- [ ] `src/jobs/health_check.py`
+- [ ] `src/jobs/ingest_sources.py`
+- [ ] `src/jobs/process_pending_documents.py`
+- [ ] `src/jobs/extract_entities.py`
+- [ ] `src/jobs/generate_embeddings.py`
+- [ ] `src/jobs/analyze_trends.py`
+- [ ] `src/jobs/generate_alerts.py`
+- [ ] `src/jobs/send_daily_reports.py`
+- [ ] `src/jobs/cleanup_old_data.py`
+
+Každý job musí mít:
+
+- [ ] jasný `main()` entrypoint,
+- [ ] načtení configu,
+- [ ] strukturované logování,
+- [ ] zápis startu běhu,
+- [ ] zápis výsledku běhu,
+- [ ] error handling,
+- [ ] bezpečné ukončení při chybě,
+- [ ] idempotentní chování.
+
+Definition of done:
+
+- [ ] Každý job lze spustit samostatně přes `uv run python -m src.jobs.<job_name>`.
+- [ ] Každý job lze později naplánovat v Railway nebo Modal.
+- [ ] Žádný job nevyžaduje ruční zásah.
+
+---
+
+## 8. Railway cron / scheduled jobs
+
+Nastavit plánované úlohy od začátku.
+
+Doporučený první plán:
 
 ```text
-docs/database.md
+health_check.py                 každých 15 minut
+ingest_sources.py               každou hodinu
+process_pending_documents.py    každých 10 minut
+extract_entities.py             každých 15 minut
+generate_embeddings.py          každých 30 minut
+analyze_trends.py               každou hodinu
+generate_alerts.py              každých 15 minut
+send_daily_reports.py           každý den ráno
+cleanup_old_data.py             jednou týdně
 ```
 
-Doporučené minimální jádro pro začátek:
+- [ ] Přidat cron pro health check.
+- [ ] Přidat cron pro ingest.
+- [ ] Přidat cron pro processing pending dokumentů.
+- [ ] Přidat cron pro entity extraction.
+- [ ] Přidat cron pro embeddings.
+- [ ] Přidat cron pro trend analysis.
+- [ ] Přidat cron pro alerting.
+- [ ] Přidat cron pro denní report.
+- [ ] Přidat cron pro cleanup.
+
+Definition of done:
+
+- [ ] Po nasazení systém běží sám.
+- [ ] Data se sbírají bez lokálního spuštění.
+- [ ] Pending dokumenty se samy zpracovávají.
+- [ ] Trendy a alerty vznikají automaticky.
+- [ ] Denní report se vytvoří automaticky.
+
+---
+
+## 9. Data sources základ
+
+Nejdřív vytvořit univerzální framework, i když konkrétní zdroje ještě nejsou finální.
+
+- [ ] Vytvořit `src/ingest/base.py`.
+- [ ] Definovat abstraktní rozhraní pro ingest source.
 
 ```text
-tenants
-tenant_members
-data_sources
-collection_runs
-raw_social_data
-entities
-entity_aliases
-document_entities
-processing_events
+fetch_items(source_config) -> list[RawItem]
+normalize_item(raw_item) -> NormalizedDocument
 ```
 
-Výsledek:
+- [ ] Vytvořit datový model `RawItem`.
+- [ ] Vytvořit datový model `NormalizedDocument`.
+- [ ] Přidat validaci povinných polí:
+  - [ ] source platform,
+  - [ ] source URL nebo external ID,
+  - [ ] content nebo title,
+  - [ ] published_at, pokud existuje.
 
-- [ ] tabulky existují,
-- [ ] indexy existují,
-- [ ] constraints fungují,
-- [ ] `pgvector` sloupec lze vytvořit,
-- [ ] dokumentace odpovídá databázi.
+- [ ] Vytvořit obecný RSS ingest modul.
+- [ ] Vytvořit obecný Apify ingest modul.
+- [ ] Vytvořit ruční/mock ingest modul pro testování.
+- [ ] Připravit data source template v databázi.
 
----
+Definition of done:
 
-### 2.4 Vytvořit první testovací tenant
-
-Vložit testovací tenant:
-
-```sql
-INSERT INTO tenants (name, slug)
-VALUES ('Local Development', 'local-dev');
-```
-
-Výsledek:
-
-- [ ] existuje testovací tenant,
-- [ ] jeho ID je možné použít v lokálním vývoji,
-- [ ] není potřeba vkládat `tenant_id` ručně do kódu napevno bez konfigurace.
+- [ ] Nový zdroj lze přidat konfigurací v DB.
+- [ ] Ingest job načte aktivní zdroje z DB.
+- [ ] Ingest job stáhne data a uloží nové záznamy.
+- [ ] Duplicity se neukládají opakovaně.
 
 ---
 
-### 2.5 Připravit databázového klienta
+## 10. První automatizovaný ingest
 
-Vytvořit například:
+Cíl: mít první reálně běžící automatický sběr.
 
-```text
-src/load/db_client.py
-```
+- [ ] Přidat první testovací RSS zdroj.
+- [ ] Přidat druhý testovací RSS zdroj.
+- [ ] Přidat třetí testovací RSS zdroj.
+- [ ] Ověřit, že `ingest_sources.py` načte zdroje z DB.
+- [ ] Ověřit, že každý běh vytvoří `collection_runs` záznam.
+- [ ] Ověřit, že nové články se uloží do `raw_social_data`.
+- [ ] Ověřit, že duplicity se započítají jako duplicity.
+- [ ] Ověřit, že chyba jednoho zdroje neshodí celý ingest všech zdrojů.
+- [ ] Ověřit, že Railway cron spouští ingest bez ručního zásahu.
 
-Odpovědnosti:
+Definition of done:
 
-- vytvoření Supabase klienta,
-- kontrola připojení,
-- základní helpery pro insert/upsert,
-- žádná transformační logika.
-
-Výsledek:
-
-- [ ] aplikace se umí připojit k Supabase,
-- [ ] existuje jednoduchý test nebo smoke test připojení,
-- [ ] chyby připojení jsou čitelně zalogované.
-
----
-
-## Fáze 3: Interní datové modely
-
-### 3.1 Definovat model surového dokumentu
-
-Vytvořit například:
-
-```text
-src/models.py
-```
-
-Nebo rozdělit modely podle domén:
-
-```text
-src/models/document.py
-src/models/entity.py
-src/models/source.py
-```
-
-Model `RawDocument` by měl obsahovat:
-
-```text
-tenant_id
-source_id
-external_id
-source_platform
-source_url
-canonical_url
-content_type
-author_handle
-title
-content
-language_code
-published_at
-metrics
-raw_metadata
-```
-
-Výsledek:
-
-- [ ] existuje interní model dokumentu,
-- [ ] ingest vrstva vrací tento model,
-- [ ] load vrstva tento model umí uložit,
-- [ ] transform vrstva ho umí obohatit.
+- [ ] Každou hodinu se automaticky zkontrolují zdroje.
+- [ ] Nové záznamy se uloží.
+- [ ] Duplicity se neukládají znovu.
+- [ ] Stav běhu je vidět v databázi.
 
 ---
 
-### 3.2 Definovat model datového zdroje
+## 11. Deduplikace
 
-Model by měl obsahovat:
+- [ ] Vytvořit `src/transform/deduplication.py`.
+- [ ] Normalizovat URL do `canonical_url`.
+- [ ] Vytvořit `content_hash` z normalizovaného obsahu.
+- [ ] Deduplikovat podle:
+  - [ ] `external_id`, pokud existuje,
+  - [ ] `canonical_url`, pokud existuje,
+  - [ ] `content_hash`, pokud existuje.
 
-```text
-name
-source_type
-source_platform
-base_url
-config
-is_active
-```
+- [ ] Označovat duplicitní záznamy jako `duplicate`, pokud se mají uchovat.
+- [ ] Nebo neukládat duplicitní záznamy, pokud nejsou potřeba.
+- [ ] Logovat počet duplicit do `collection_runs.duplicate_count`.
 
-Výsledek:
+Definition of done:
 
-- [ ] existuje model zdroje,
-- [ ] odpovídá tabulce `data_sources`,
-- [ ] lze podle něj vytvořit první zdroj.
-
----
-
-### 3.3 Definovat model entity
-
-Model by měl obsahovat:
-
-```text
-entity_name
-normalized_name
-entity_type
-aliases
-is_tracked
-```
-
-Výsledek:
-
-- [ ] existuje model entity,
-- [ ] existuje model aliasu,
-- [ ] model podporuje sledované i extrahované entity.
+- [ ] Opakované spuštění ingestu nevytváří duplicitní data.
+- [ ] Stejný článek z RSS se neukládá vícekrát.
+- [ ] Deduplikace funguje bez ruční kontroly.
 
 ---
 
-## Fáze 4: První datový zdroj
+## 12. Základní transformace dokumentů
 
-### 4.1 Začít nejjednodušším zdrojem
+- [ ] Vytvořit `src/transform/normalize_text.py`.
+- [ ] Čistit HTML.
+- [ ] Normalizovat whitespace.
+- [ ] Odstraňovat prázdné a příliš krátké dokumenty.
+- [ ] Detekovat jazyk.
+- [ ] Ukládat `language_code`.
+- [ ] Nastavit `processing_status`.
+- [ ] Zpracovat pouze dokumenty ve stavu `pending`.
+- [ ] Po úspěchu nastavit `processing_status = processed` nebo další mezistav.
+- [ ] Po chybě nastavit `processing_status = error`.
 
-Doporučení:
+Definition of done:
 
-Začít s RSS nebo jednoduchým veřejným zpravodajským zdrojem.
-
-Nezačínat hned složitou sociální sítí, protože sociální platformy mají:
-
-- API limity,
-- právní omezení,
-- nestabilní struktury,
-- často problematickou dostupnost dat.
-
-Výsledek:
-
-- [ ] vybraný první zdroj,
-- [ ] zdroj je veřejný,
-- [ ] je technicky jednoduchý,
-- [ ] má známé podmínky použití,
-- [ ] je zapsaný v `docs/data_sources.md`.
+- [ ] Nové dokumenty se automaticky čistí.
+- [ ] Dokumenty mají jazyk.
+- [ ] Chybné dokumenty neblokují pipeline.
 
 ---
 
-### 4.2 Přidat zdroj do tabulky `data_sources`
+## 13. Entity monitoring
 
-Vložit první zdroj ručně nebo přes seed skript.
+- [ ] Vytvořit první sledované entity v DB.
+- [ ] Ke každé entitě přidat aliasy.
+- [ ] Vytvořit `src/transform/entity_matching.py`.
+- [ ] Implementovat exact match.
+- [ ] Implementovat normalized match bez diakritiky.
+- [ ] Implementovat alias match.
+- [ ] Implementovat jednoduchý regex match pro hashtagy.
+- [ ] Ukládat výsledky do `document_entities`.
+- [ ] Ukládat `occurrence_count`.
+- [ ] Ukládat `matched_text`.
+- [ ] Ukládat `context_snippet`.
+- [ ] Ukládat `detection_method`.
 
-Příklad:
+Definition of done:
 
-```text
-name: Example RSS Source
-source_type: rss
-source_platform: rss
-base_url: https://example.com/rss
-config: {}
-is_active: true
-```
-
-Výsledek:
-
-- [ ] první zdroj je v databázi,
-- [ ] je aktivní,
-- [ ] pipeline ho umí načíst.
-
----
-
-### 4.3 Implementovat ingest modul
-
-Vytvořit například:
-
-```text
-src/ingest/rss_ingest.py
-```
-
-Odpovědnosti:
-
-- načíst RSS feed,
-- získat položky,
-- převést položky na interní model,
-- vrátit seznam dokumentů,
-- nelogovat citlivá data,
-- neukládat přímo do databáze.
-
-Výsledek:
-
-- [ ] ingest stáhne data,
-- [ ] ingest vrací interní modely,
-- [ ] ingest má test s ukázkovým RSS vstupem,
-- [ ] chyby zdroje jsou ošetřené.
+- [ ] Systém automaticky najde zmínky sledovaných entit.
+- [ ] Každý dokument ví, jaké entity obsahuje.
+- [ ] Entity matching běží v plánovaném jobu.
 
 ---
 
-## Fáze 5: Normalizace a deduplikace
+## 14. Sentiment a risk scoring MVP
 
-### 5.1 Normalizovat URL
+Nejdřív jednoduchá a levná verze.
 
-Vytvořit například:
+- [ ] Vytvořit `src/transform/sentiment.py`.
+- [ ] Vytvořit `src/transform/risk_scoring.py`.
+- [ ] Implementovat jednoduchá pravidla pro negativní slova.
+- [ ] Implementovat základní sentiment score v rozsahu `-1` až `1`.
+- [ ] Implementovat základní risk score v rozsahu `0` až `1`.
+- [ ] Skórovat pouze dokumenty, které obsahují sledovanou entitu.
+- [ ] Ukládat skóre na úrovni dokumentu.
+- [ ] Ukládat skóre na úrovni `document_entities`.
+- [ ] Přidat LLM klasifikaci pouze pro kandidáty s vyšším rizikem.
+- [ ] Ukládat použitý model a metadata klasifikace do `processing_metadata`.
 
-```text
-src/transform/url_normalizer.py
-```
+Definition of done:
 
-Normalizace může řešit:
-
-- odstranění tracking parametrů,
-- sjednocení trailing slash,
-- lowercase hostu,
-- odstranění fragmentů,
-- canonical URL.
-
-Výsledek:
-
-- [ ] stejná URL se neukládá vícekrát kvůli UTM parametrům,
-- [ ] existují testy pro běžné varianty URL,
-- [ ] canonical URL se ukládá do databáze.
+- [ ] Systém umí rozlišit neutrální a rizikovější zmínky.
+- [ ] LLM se nevolá na všechny dokumenty.
+- [ ] Náklady jsou kontrolované.
 
 ---
 
-### 5.2 Vytvořit hash obsahu
+## 15. Embeddingy
 
-Vytvořit například:
+- [ ] Vytvořit `src/transform/embeddings.py`.
+- [ ] Generovat embeddingy pouze pro relevantní dokumenty.
+- [ ] Dávkovat dokumenty po rozumných dávkách.
+- [ ] Ukládat embedding do `raw_social_data.embedding`.
+- [ ] Zamezit opakovanému generování embeddingu pro stejný dokument.
+- [ ] Přidat retry při chybě API.
+- [ ] Přidat limit na počet dokumentů zpracovaných jedním během.
+- [ ] Přidat monitoring nákladů přes počet zpracovaných dokumentů.
 
-```text
-src/transform/content_hash.py
-```
+Definition of done:
 
-Hash by měl vznikat z normalizovaného textu.
-
-Výsledek:
-
-- [ ] stejný obsah má stejný hash,
-- [ ] hash se ukládá do `content_hash`,
-- [ ] duplicity lze odhalit i bez `external_id`.
-
----
-
-### 5.3 Vyčistit text
-
-Vytvořit například:
-
-```text
-src/transform/text_cleaning.py
-```
-
-Čištění může řešit:
-
-- nadbytečné mezery,
-- HTML entity,
-- prázdné řádky,
-- boilerplate texty,
-- extrémně krátký obsah.
-
-Výsledek:
-
-- [ ] texty jsou ukládány v rozumné podobě,
-- [ ] prázdné a nevalidní záznamy jsou ignorované,
-- [ ] existují testy pro čištění textu.
+- [ ] Embeddingy se generují automaticky.
+- [ ] Embedding job lze spouštět přes Railway cron.
+- [ ] Později lze job přesunout do Modal bez změny datového modelu.
 
 ---
 
-## Fáze 6: Ukládání dokumentů
+## 16. Modal pro těžké úlohy
 
-### 6.1 Implementovat `collection_runs`
+Modal použít pro dražší nebo dávkové úlohy, které nemají běžet dlouho na Railway.
 
-Při každém spuštění ingest pipeline vytvořit záznam v `collection_runs`.
+- [ ] Připravit Modal projekt.
+- [ ] Nastavit Modal secrets:
+  - [ ] `SUPABASE_URL`
+  - [ ] `SUPABASE_SERVICE_ROLE_KEY`
+  - [ ] `OPENAI_API_KEY`
 
-Tok:
+- [ ] Připravit Modal job pro batch embeddings.
+- [ ] Připravit Modal job pro větší LLM klasifikace.
+- [ ] Připravit Modal job pro historickou reanalýzu dokumentů.
+- [ ] Připravit Modal job pro re-clustering témat.
+- [ ] Omezit Modal úlohy dávkováním a limity.
 
-```text
-create collection_run(status='running')
-run ingest
-store documents
-update counts
-finish collection_run(status='success' or 'error')
-```
+Definition of done:
 
-Výsledek:
-
-- [ ] každý běh pipeline je auditovatelný,
-- [ ] počet stažených záznamů se ukládá,
-- [ ] počet vložených záznamů se ukládá,
-- [ ] počet duplicit se ukládá,
-- [ ] chyby se ukládají.
+- [ ] Railway drží orchestraci a lehčí joby.
+- [ ] Modal řeší výpočetně nebo nákladově těžší batch úlohy.
+- [ ] Systém se nemusí spouštět ručně lokálně.
 
 ---
 
-### 6.2 Implementovat upsert do `raw_social_data`
+## 17. Trend snapshots MVP
 
-Vytvořit například:
+- [ ] Vytvořit `src/analyze/trends.py`.
+- [ ] Agregovat počet zmínek podle entity.
+- [ ] Agregovat počet negativních zmínek podle entity.
+- [ ] Agregovat průměrný sentiment podle entity.
+- [ ] Agregovat průměrný risk score podle entity.
+- [ ] Vytvářet hodinové snapshoty.
+- [ ] Vytvářet denní snapshoty.
+- [ ] Ukládat výsledky do `trend_snapshots`.
+- [ ] Nepřepisovat historii bez důvodu.
+- [ ] Přepočet stejného okna musí být idempotentní.
 
-```text
-src/load/documents.py
-```
+Definition of done:
 
-Požadavky:
-
-- ukládat dokumenty,
-- respektovat deduplikační indexy,
-- nepádat při duplicitě,
-- vracet statistiky vložení.
-
-Výsledek:
-
-- [ ] dokument lze uložit,
-- [ ] duplicita se neuloží dvakrát,
-- [ ] chyba se zapíše do logu nebo `processing_events`,
-- [ ] existuje test nebo smoke test ukládání.
+- [ ] Trendy se počítají automaticky každou hodinu.
+- [ ] Denní trendy vznikají automaticky.
+- [ ] Data jsou připravena pro grafy a reporty.
 
 ---
 
-### 6.3 Přidat `processing_events`
+## 18. Anomaly detection MVP
 
-Logovat důležité události:
+- [ ] Vypočítat baseline za posledních 7 dní.
+- [ ] Vypočítat baseline za posledních 30 dní.
+- [ ] Porovnat aktuální okno s baseline.
+- [ ] Vypočítat `trend_score`.
+- [ ] Vypočítat `anomaly_score`.
+- [ ] Rozlišit běžný růst a rizikový růst.
+- [ ] Více vážit negativní zmínky.
+- [ ] Více vážit růst zmínek u sledovaných entit.
+- [ ] Ukládat výsledek do `trend_snapshots`.
 
-- start ingestu,
-- konec ingestu,
-- chyba zdroje,
-- chyba transformace,
-- chyba databáze,
-- ignorovaný záznam,
-- duplicita.
+Definition of done:
 
-Výsledek:
-
-- [ ] pipeline má auditní stopu,
-- [ ] chyby lze dohledat v databázi,
-- [ ] debugging není závislý pouze na konzolových logách.
-
----
-
-## Fáze 7: Entity model a základní matching
-
-### 7.1 Přidat ručně sledované entity
-
-Nejdřív nepoužívat složité NLP.
-
-Začít ručně definovanými entitami:
-
-```text
-OpenAI
-ChatGPT
-Microsoft
-Google
-Škoda Auto
-```
-
-Výsledek:
-
-- [ ] entity jsou uložené v tabulce `entities`,
-- [ ] mají `normalized_name`,
-- [ ] sledované entity mají `is_tracked = true`,
-- [ ] dokumentace v `docs/entities.md` odpovídá implementaci.
+- [ ] Systém pozná neobvyklý nárůst zmínek.
+- [ ] Systém pozná neobvyklý nárůst negativních zmínek.
+- [ ] Výsledek lze použít pro alerting.
 
 ---
 
-### 7.2 Přidat aliasy
+## 19. Alerting MVP
 
-Příklad:
+- [ ] Vytvořit `src/analyze/alert_rules.py`.
+- [ ] Vytvořit `src/jobs/generate_alerts.py`.
+- [ ] Implementovat alert typy:
+  - [ ] `mention_spike`,
+  - [ ] `negative_sentiment_spike`,
+  - [ ] `risk_score_spike`,
+  - [ ] `new_topic`,
+  - [ ] `high_engagement`.
 
-```text
-OpenAI -> Open AI, ChatGPT, GPT
-Škoda Auto -> Skoda Auto, Škoda, Škodovka, Skodovka
-```
+- [ ] Implementovat severity:
+  - [ ] `info`,
+  - [ ] `low`,
+  - [ ] `medium`,
+  - [ ] `high`,
+  - [ ] `critical`.
 
-Výsledek:
+- [ ] Deduplikovat alerty.
+- [ ] Aktualizovat existující otevřený alert místo vytváření nového, pokud jde o stejný problém.
+- [ ] Ukládat alert payload s důvody, proč alert vznikl.
+- [ ] Ukládat top dokumenty, které alert způsobily.
+- [ ] Ukládat doporučený další krok.
 
-- [ ] aliasy jsou v `entity_aliases`,
-- [ ] alias matching funguje,
-- [ ] normalizace řeší diakritiku,
-- [ ] existují testy pro alias matching.
+Definition of done:
 
----
-
-### 7.3 Implementovat jednoduchý entity matcher
-
-Vytvořit například:
-
-```text
-src/transform/entity_matching.py
-```
-
-První verze:
-
-- exact match,
-- normalized match,
-- alias match.
-
-Pozdější verze:
-
-- regex,
-- NER model,
-- LLM extrakce.
-
-Výsledek:
-
-- [ ] dokument se spáruje s entitou,
-- [ ] vazba se uloží do `document_entities`,
-- [ ] ukládá se `matched_text`,
-- [ ] ukládá se `occurrence_count`,
-- [ ] ukládá se `detection_method`.
+- [ ] Alerty vznikají automaticky.
+- [ ] Jeden problém nevytváří desítky duplicitních alertů.
+- [ ] Alert obsahuje jasný důvod vzniku.
 
 ---
 
-## Fáze 8: Základní NLP vrstva
+## 20. Notifikace alertů
 
-### 8.1 Detekce jazyka
+- [ ] Vytvořit `src/utils/notifications.py`.
+- [ ] Přidat e-mail notifikace.
+- [ ] Přidat Slack webhook notifikace.
+- [ ] Přidat volitelně Teams webhook notifikace.
+- [ ] Posílat pouze nové nebo významně aktualizované alerty.
+- [ ] Neposílat stále stejný alert dokola.
+- [ ] Ukládat čas posledního odeslání notifikace.
+- [ ] Přidat fail-safe při výpadku notifikační služby.
 
-Implementovat detekci jazyka pro každý dokument.
+Definition of done:
 
-Výsledek:
-
-- [ ] `language_code` se ukládá,
-- [ ] neznámý jazyk je ošetřený,
-- [ ] jazyk lze použít pro výběr dalších modelů.
-
----
-
-### 8.2 Jednoduchý sentiment
-
-Začít jednoduše.
-
-Možnosti:
-
-- pravidlový baseline,
-- levný LLM prompt,
-- lokální model,
-- externí API.
-
-Výsledek:
-
-- [ ] dokument má `sentiment_score`,
-- [ ] sentiment je v rozsahu `-1.0 až 1.0`,
-- [ ] chyba sentimentu nezastaví celou pipeline,
-- [ ] výsledek je uložený do databáze.
+- [ ] Kritický alert přijde bez ručního zásahu.
+- [ ] Systém nespamuje.
+- [ ] Chyba notifikace se zaloguje a nezastaví pipeline.
 
 ---
 
-### 8.3 Entity-level sentiment
+## 21. Denní report MVP
 
-Po dokumentovém sentimentu přidat sentiment vůči konkrétní entitě.
+- [ ] Vytvořit `src/reports/daily_report.py`.
+- [ ] Generovat denní report pro každého tenanta.
+- [ ] Report musí obsahovat:
+  - [ ] sledované entity,
+  - [ ] počet nových zmínek,
+  - [ ] počet negativních zmínek,
+  - [ ] top zdroje,
+  - [ ] top dokumenty,
+  - [ ] nejrizikovější dokumenty,
+  - [ ] nové alerty,
+  - [ ] srovnání s předchozím dnem,
+  - [ ] stručné shrnutí.
 
-Výsledek:
+- [ ] Generovat report jako Markdown.
+- [ ] Později přidat HTML.
+- [ ] Později přidat PDF.
+- [ ] Posílat report e-mailem.
+- [ ] Ukládat vygenerovaný report do databáze nebo storage.
 
-- [ ] `document_entities.sentiment_score` se plní,
-- [ ] sentiment entity může být jiný než sentiment celého dokumentu,
-- [ ] existuje jasná fallback strategie.
+Definition of done:
 
----
-
-### 8.4 Embeddingy
-
-Vytvořit například:
-
-```text
-src/transform/embeddings.py
-```
-
-Požadavky:
-
-- nevytvářet embedding pro prázdný text,
-- batchovat požadavky,
-- ošetřit rate limits,
-- ukládat embedding do `raw_social_data.embedding`,
-- logovat chyby bezpečně.
-
-Výsledek:
-
-- [ ] dokument má embedding,
-- [ ] embedding má správnou dimenzi,
-- [ ] lze spustit sémantický dotaz,
-- [ ] chyba OpenAI API nezničí celý běh.
+- [ ] Každý den vznikne report automaticky.
+- [ ] Report lze poslat klientovi bez ručních úprav.
+- [ ] Chyba u jednoho tenanta nezastaví reporty ostatních tenantů.
 
 ---
 
-## Fáze 9: První analytická vrstva
+## 22. Základní administrační CLI
 
-### 9.1 Vytvořit agregaci zmínek podle entity
+CLI slouží jen pro správu a debug, ne pro běžný produkční provoz.
 
-Vytvořit například:
+- [ ] Přidat příkaz pro vytvoření tenanta.
+- [ ] Přidat příkaz pro přidání entity.
+- [ ] Přidat příkaz pro přidání aliasu.
+- [ ] Přidat příkaz pro přidání data source.
+- [ ] Přidat příkaz pro ruční spuštění jobu ve stagingu.
+- [ ] Přidat příkaz pro kontrolu posledních collection runs.
+- [ ] Přidat příkaz pro kontrolu otevřených alertů.
 
-```text
-src/analyze/entity_mentions.py
-```
+Definition of done:
 
-Agregace:
-
-- počet zmínek za den,
-- počet zmínek za hodinu,
-- průměrný sentiment,
-- počet negativních zmínek,
-- počet zdrojů.
-
-Výsledek:
-
-- [ ] lze zjistit počet zmínek entity v čase,
-- [ ] lze zobrazit jednoduchou časovou řadu,
-- [ ] dotazy jsou omezené na tenant_id.
+- [ ] Základní správa systému nevyžaduje ruční SQL.
+- [ ] Produkční pipeline stále běží automaticky přes cron.
 
 ---
 
-### 9.2 Plnit `trend_snapshots`
+## 23. Dashboard později, ale data připravovat hned
 
-Začít denním a hodinovým oknem.
+- [ ] Navrhnout dotazy pro přehled entit.
+- [ ] Navrhnout dotazy pro seznam dokumentů.
+- [ ] Navrhnout dotazy pro trend grafy.
+- [ ] Navrhnout dotazy pro alerty.
+- [ ] Navrhnout dotazy pro detail entity.
+- [ ] Navrhnout dotazy pro detail dokumentu.
+- [ ] Nezačínat komplexním dashboardem, dokud nefunguje automatická pipeline.
 
-První verze:
+Definition of done:
 
-```text
-window_granularity = 'hour'
-window_granularity = 'day'
-```
-
-Výsledek:
-
-- [ ] `trend_snapshots` se plní,
-- [ ] pro každou sledovanou entitu vzniká časový snímek,
-- [ ] ukládá se `mention_count`,
-- [ ] ukládá se `negative_count`,
-- [ ] ukládá se `avg_sentiment_score`.
+- [ ] Databáze umí obsloužit budoucí dashboard.
+- [ ] MVP není blokované frontendem.
 
 ---
 
-### 9.3 Přidat jednoduchý trend score
+## 24. Testování
 
-První verze může být pravidlová.
+- [ ] Přidat unit testy pro config.
+- [ ] Přidat unit testy pro normalizaci URL.
+- [ ] Přidat unit testy pro content hash.
+- [ ] Přidat unit testy pro deduplikaci.
+- [ ] Přidat unit testy pro entity matching.
+- [ ] Přidat unit testy pro risk scoring.
+- [ ] Přidat unit testy pro trend score.
+- [ ] Přidat testy pro alert rules.
+- [ ] Přidat testovací RSS payload.
+- [ ] Přidat testovací článek bez obsahu.
+- [ ] Přidat testovací duplicitní článek.
+- [ ] Přidat testovací negativní zmínku.
+- [ ] Přidat testovací neutrální zmínku.
 
-Příklad:
+Definition of done:
 
-```text
-trend_score = aktuální počet zmínek / historický baseline
-```
-
-Potom normalizovat do rozsahu `0.0 až 1.0`.
-
-Výsledek:
-
-- [ ] entity mají trend score,
-- [ ] trend score reaguje na nárůst zmínek,
-- [ ] trend score není pouze absolutní počet zmínek,
-- [ ] malé entity nejsou automaticky znevýhodněné.
-
----
-
-### 9.4 Přidat jednoduchý anomaly score
-
-První verze:
-
-- porovnání proti průměru za posledních 7 dní,
-- porovnání proti průměru za posledních 30 dní,
-- jednoduchý z-score nebo poměr vůči baseline.
-
-Výsledek:
-
-- [ ] systém pozná náhlý nárůst,
-- [ ] anomaly score se ukládá,
-- [ ] výpočet je zdokumentovaný v `docs/trend_detection.md`.
+- [ ] Základní logika je chráněná testy.
+- [ ] Před deploymentem běží lint, format a testy.
 
 ---
 
-## Fáze 10: Alerting
+## 25. CI/CD
 
-### 10.1 Definovat první alert pravidla
+- [ ] Přidat GitHub Actions workflow.
+- [ ] Workflow musí spouštět:
+  - [ ] `uv sync`,
+  - [ ] `uv run ruff check .`,
+  - [ ] `uv run ruff format . --check`,
+  - [ ] `uv run pytest`.
 
-Začít s jednoduchými pravidly:
+- [ ] Zabránit merge, pokud testy neprojdou.
+- [ ] Přidat kontrolu, že v commitu nejsou secrets.
+- [ ] Přidat základní secret scanning.
+- [ ] Railway deployment spouštět až po úspěšném CI.
 
-```text
-mention_spike
-negative_sentiment_spike
-risk_score_spike
-new_topic
-```
+Definition of done:
 
-První pravidlo může být:
-
-```text
-Pokud mention_count za poslední hodinu překročí 3x běžný hodinový baseline, vytvoř alert.
-```
-
-Výsledek:
-
-- [ ] existuje první alert rule,
-- [ ] alert se uloží do tabulky `alerts`,
-- [ ] alert má severity,
-- [ ] alert má status `open`,
-- [ ] alert je navázaný na entitu nebo téma.
+- [ ] Rozbitý kód se nedostane do produkce.
+- [ ] Deployment je automatický, ale kontrolovaný.
 
 ---
 
-### 10.2 Deduplikace alertů
+## 26. Fail-safe režim
 
-Cíl:
+- [ ] Pokud selže ingest jednoho zdroje, ostatní zdroje pokračují.
+- [ ] Pokud selže LLM volání, dokument se označí jako error nebo retry candidate.
+- [ ] Pokud selže embedding job, ostatní pipeline kroky pokračují.
+- [ ] Pokud selže report pro jednoho tenanta, ostatní reporty pokračují.
+- [ ] Pokud selže notifikace, alert zůstane uložený jako neodeslaný.
+- [ ] Přidat retry count k relevantním záznamům.
+- [ ] Přidat maximální počet retry pokusů.
+- [ ] Přidat dead-letter stav pro opakovaně chybující záznamy.
 
-Nespamovat zákazníka deseti alerty pro stejný problém.
+Definition of done:
 
-Pravidlo:
-
-- pokud existuje otevřený alert pro stejnou entitu a stejný typ, aktualizovat ho,
-- nevytvářet nový alert pokaždé.
-
-Výsledek:
-
-- [ ] opakovaný problém aktualizuje existující alert,
-- [ ] `last_updated_at` se mění,
-- [ ] `alert_payload` se doplňuje,
-- [ ] alerting nespamuje.
+- [ ] Jedna chyba nezastaví celý systém.
+- [ ] Chybové záznamy lze dohledat a později opravit.
 
 ---
 
-### 10.3 Připravit výstup alertů
+## 27. Nákladová kontrola
 
-Nejdřív stačí konzole nebo databáze.
+- [ ] Nevolat OpenAI API na irelevantní dokumenty.
+- [ ] Nevolat embeddingy na duplicitní dokumenty.
+- [ ] Nevolat LLM na dokumenty bez sledované entity.
+- [ ] Přidat denní limit LLM zpracování.
+- [ ] Přidat denní limit embedding zpracování.
+- [ ] Logovat počet LLM volání.
+- [ ] Logovat počet embedding volání.
+- [ ] Přidat jednoduchý cost report do denního interního reportu.
 
-Potom:
+Definition of done:
 
-- e-mail,
-- Slack,
-- Teams,
-- webhook.
-
-Výsledek první verze:
-
-- [ ] alerty jsou dohledatelné v databázi,
-- [ ] existuje jednoduchý výpis otevřených alertů,
-- [ ] alert obsahuje srozumitelný popis.
-
----
-
-## Fáze 11: CLI nebo jednoduché interní API
-
-### 11.1 Přidat jednoduché příkazy pro lokální práci
-
-Možné příkazy:
-
-```powershell
-uv run python src/main.py ingest
-uv run python src/main.py analyze
-uv run python src/main.py alerts
-uv run python src/main.py full-run
-```
-
-Výsledek:
-
-- [ ] lze spustit pouze ingest,
-- [ ] lze spustit pouze analýzu,
-- [ ] lze spustit alerting,
-- [ ] lze spustit celý tok.
+- [ ] Náklady jsou předvídatelné.
+- [ ] Chyba v pipeline nemůže nekontrolovaně spálit API kredit.
 
 ---
 
-### 11.2 Připravit API až později
+## 28. Bezpečnost
 
-API není nutné pro první datové MVP.
+- [ ] Ověřit, že `.env` není v repozitáři.
+- [ ] Ověřit, že service role key není použit ve frontendu.
+- [ ] Ověřit, že secrets nejsou v logu.
+- [ ] Omezit přístup k produkční Supabase databázi.
+- [ ] Omezit přístup k Railway projektu.
+- [ ] Omezit přístup k Modal projektu.
+- [ ] Zapnout RLS.
+- [ ] Připravit minimální policies pro budoucí frontend.
+- [ ] Logovat administrativní změny tenantů, entit a zdrojů.
 
-API začít řešit až po tom, co funguje:
+Definition of done:
 
-- databáze,
-- ingest,
-- transformace,
-- entity matching,
-- trend snapshots,
-- alerty.
-
-Výsledek:
-
-- [ ] API se nezačne stavět předčasně,
-- [ ] nejdřív existuje funkční datové jádro.
-
----
-
-## Fáze 12: Testování
-
-### 12.1 Unit testy pro transformace
-
-Testovat hlavně:
-
-- URL normalizaci,
-- čištění textu,
-- content hash,
-- normalizaci názvů entit,
-- alias matching,
-- výpočet trend score.
-
-Výsledek:
-
-- [ ] transformace mají unit testy,
-- [ ] testy běží přes `uv run pytest`,
-- [ ] kritické části nejsou testované pouze ručně.
+- [ ] Produkční secrets jsou chráněné.
+- [ ] Tenant data jsou oddělená.
+- [ ] Veřejný klient nikdy nemá service role key.
 
 ---
 
-### 12.2 Testovací fixtures
+## 29. Privacy a compliance základ
 
-Vytvořit:
+- [ ] Dokumentovat, jaké typy dat systém ukládá.
+- [ ] Neukládat zbytečná osobní data.
+- [ ] Neukládat neveřejný obsah bez oprávnění.
+- [ ] U každého data source evidovat právní/technickou poznámku.
+- [ ] Přidat možnost deaktivovat zdroj.
+- [ ] Přidat možnost mazat data konkrétního tenanta.
+- [ ] Přidat retenční pravidla pro stará data.
+- [ ] Přidat cleanup job.
 
-```text
-tests/fixtures/rss_sample.xml
-tests/fixtures/raw_documents.json
-tests/fixtures/entities.json
-```
+Definition of done:
 
-Výsledek:
-
-- [ ] testy nepoužívají živý externí zdroj,
-- [ ] testy jsou deterministické,
-- [ ] lze testovat pipeline offline.
-
----
-
-### 12.3 Integrační test pipeline
-
-Cíl:
-
-Spustit zjednodušenou pipeline nad fixture daty.
-
-Tok:
-
-```text
-fixture source
-→ ingest parser
-→ transform
-→ entity matching
-→ fake load or test DB
-```
-
-Výsledek:
-
-- [ ] pipeline funguje jako celek,
-- [ ] chyby ve vazbách mezi moduly se objeví v testech,
-- [ ] základní MVP je možné ověřit jedním příkazem.
+- [ ] Je jasné, odkud data pochází.
+- [ ] Je jasné, proč jsou data uložena.
+- [ ] Je možné data odstranit nebo omezit jejich uchování.
 
 ---
 
-## Fáze 13: Deployment
+## 30. První MVP bez dashboardu
 
-### 13.1 Připravit Railway pro lehké joby
+Cíl: automatický monitoring a report bez ručního spouštění.
 
-Použití:
+- [ ] Supabase databáze běží.
+- [ ] Railway deployment běží.
+- [ ] Railway crony běží.
+- [ ] První tenant existuje.
+- [ ] První entity existují.
+- [ ] První aliasy existují.
+- [ ] První RSS zdroje existují.
+- [ ] Ingest běží každou hodinu.
+- [ ] Processing běží automaticky.
+- [ ] Entity matching běží automaticky.
+- [ ] Sentiment/risk scoring běží automaticky.
+- [ ] Trend snapshots se generují automaticky.
+- [ ] Alerty vznikají automaticky.
+- [ ] Denní report se generuje automaticky.
+- [ ] Denní report se posílá automaticky.
 
-- cron,
-- webhooky,
-- jednoduché API,
-- lehký worker.
+Definition of done:
 
-Výsledek:
-
-- [ ] Railway projekt existuje,
-- [ ] env vars jsou nastavené v Railway,
-- [ ] aplikace se deployne,
-- [ ] logy jsou čitelné,
-- [ ] secrets nejsou v repozitáři.
-
----
-
-### 13.2 Připravit Modal pro těžší úlohy
-
-Použití:
-
-- embeddingy,
-- dávkové LLM zpracování,
-- větší NLP joby.
-
-Výsledek:
-
-- [ ] Modal projekt existuje,
-- [ ] secrets jsou nastavené v Modal,
-- [ ] jeden jednoduchý job se spustí,
-- [ ] náklady jsou kontrolované.
+- [ ] Systém může běžet několik dní bez ručního zásahu.
+- [ ] Po několika dnech existují data, trendy, alerty a reporty.
+- [ ] Výstup lze ukázat prvnímu testovacímu zákazníkovi.
 
 ---
 
-### 13.3 Nastavit prostředí
+## 31. První pilotní výstup
 
-Používat prostředí:
+- [ ] Vybrat jednu testovací značku nebo entitu.
+- [ ] Sledovat ji minimálně 7 dní.
+- [ ] Nasbírat data z prvních zdrojů.
+- [ ] Vygenerovat denní reporty.
+- [ ] Vygenerovat týdenní shrnutí.
+- [ ] Ručně zkontrolovat přesnost entity matching.
+- [ ] Ručně zkontrolovat sentiment/risk scoring.
+- [ ] Upravit aliasy podle reálných dat.
+- [ ] Upravit risk pravidla podle reálných dat.
+- [ ] Připravit ukázkový report pro PR agenturu nebo klienta.
 
-```text
-local
-staging
-production
-```
+Definition of done:
 
-Výsledek:
-
-- [ ] každé prostředí má vlastní konfiguraci,
-- [ ] produkční secrets nejsou lokálně v repozitáři,
-- [ ] staging lze použít pro testování před produkcí.
-
----
-
-## Fáze 14: Bezpečnost a compliance
-
-### 14.1 Service role key pouze na serveru
-
-Ověřit:
-
-- není ve frontendu,
-- není v logu,
-- není v repozitáři,
-- není v dokumentaci s reálnou hodnotou.
-
-Výsledek:
-
-- [ ] service role key je pouze v serverovém prostředí,
-- [ ] veřejný klient ho nikdy nepoužívá.
+- [ ] Existuje reálný ukázkový výstup.
+- [ ] Výstup není jen technické demo.
+- [ ] Dá se ukázat člověku mimo projekt.
 
 ---
 
-### 14.2 Připravit RLS policies
+## 32. První obchodní validace
 
-RLS policies řešit před tím, než bude existovat frontend nebo přístup zákazníků.
+- [ ] Připravit krátký popis služby.
+- [ ] Připravit ukázkový report.
+- [ ] Připravit seznam 10 PR agentur nebo potenciálních klientů.
+- [ ] Oslovit první 3 kontakty.
+- [ ] Zjistit, jak dnes řeší monitoring.
+- [ ] Zjistit, co jim vadí na současných nástrojích.
+- [ ] Zjistit, jak často potřebují reporty.
+- [ ] Zjistit, jaké zdroje jsou pro ně klíčové.
+- [ ] Zjistit, kolik by byli ochotni platit za pilot.
+- [ ] Nabídnout omezený měsíční pilot.
 
-Minimální princip:
+Definition of done:
 
-```text
-Uživatel smí číst pouze data tenantů, kde je členem.
-```
-
-Výsledek:
-
-- [ ] RLS je zapnuté,
-- [ ] policies jsou otestované,
-- [ ] uživatel nevidí data jiného tenanta,
-- [ ] role mají jasné možnosti.
-
----
-
-### 14.3 Pravidla pro externí zdroje
-
-Před přidáním každého zdroje ověřit:
-
-- technickou dostupnost,
-- API limity,
-- podmínky použití,
-- zda jde o veřejná data,
-- zda je možné data ukládat,
-- zda není nutná licence.
-
-Výsledek:
-
-- [ ] každý zdroj má záznam v `docs/data_sources.md`,
-- [ ] každý zdroj má poznámku k právním omezením,
-- [ ] neobcházejí se přístupy k neveřejným datům.
+- [ ] Existuje reálná zpětná vazba z trhu.
+- [ ] Je jasné, co doplnit před placeným pilotem.
+- [ ] Projekt se nerozvíjí jen podle domněnek.
 
 ---
 
-## Fáze 15: První MVP scénář
+## 33. Verze 1.0 MVP checklist
 
-### 15.1 Definovat MVP use case
+MVP je hotové, pokud platí:
 
-Doporučený první use case:
-
-```text
-Systém jednou za čas stáhne články z jednoho RSS zdroje, uloží je, najde v nich sledované entity, spočítá počet zmínek a vytvoří alert, pokud zmínky výrazně vzrostou.
-```
-
-Výsledek:
-
-- [ ] MVP má jasný cíl,
-- [ ] není příliš široké,
-- [ ] lze ho předvést,
-- [ ] lze ho otestovat.
-
----
-
-### 15.2 MVP checklist
-
-MVP je hotové, když platí:
-
-- [ ] existuje Supabase databáze,
-- [ ] existuje minimální schéma,
-- [ ] existuje jeden tenant,
-- [ ] existuje jeden data source,
-- [ ] ingest stáhne data,
-- [ ] data se normalizují,
-- [ ] duplicity se neukládají,
-- [ ] dokumenty se uloží do `raw_social_data`,
-- [ ] existují sledované entity,
-- [ ] entity matching funguje,
-- [ ] vazby se uloží do `document_entities`,
-- [ ] vznikne základní agregace,
-- [ ] vznikne `trend_snapshot`,
-- [ ] vznikne alert při překročení pravidla,
-- [ ] vše lze spustit jedním příkazem,
-- [ ] základní tok je zdokumentovaný.
+- [ ] Systém běží v produkčním prostředí.
+- [ ] Systém nevyžaduje lokální ruční spouštění.
+- [ ] Data sources jsou konfigurované v databázi.
+- [ ] Ingest běží automaticky.
+- [ ] Deduplikace funguje.
+- [ ] Entity matching funguje.
+- [ ] Sentiment/risk scoring funguje alespoň základně.
+- [ ] Trend snapshots vznikají automaticky.
+- [ ] Alerty vznikají automaticky.
+- [ ] Denní report vzniká automaticky.
+- [ ] Chyby se ukládají do databáze.
+- [ ] Logs jsou dostupné v Railway.
+- [ ] Secrets jsou mimo repozitář.
+- [ ] Náklady jsou pod kontrolou.
+- [ ] Existuje první ukázkový report.
+- [ ] Existuje seznam známých limitací.
+- [ ] Existuje plán dalšího vývoje podle feedbacku.
 
 ---
 
-## Fáze 16: Po MVP
+## 34. Co zatím nedělat
 
-### 16.1 Přidat další zdroje
-
-Po funkčním MVP přidávat zdroje postupně.
-
-Doporučené pořadí:
-
-1. další RSS zdroje,
-2. zpravodajské weby,
-3. Apify actor,
-4. YouTube nebo jiná platforma s dostupným API,
-5. další sociální signály podle právní dostupnosti.
-
-Výsledek:
-
-- [ ] každý nový zdroj má vlastní dokumentaci,
-- [ ] každý nový zdroj má test,
-- [ ] každý nový zdroj má jasnou mapovací logiku.
+- [ ] Nestavět plný SaaS dashboard jako první.
+- [ ] Nedělat billing.
+- [ ] Nedělat veřejnou registraci.
+- [ ] Nedělat mobilní aplikaci.
+- [ ] Nedělat podporu všech sociálních sítí najednou.
+- [ ] Nedělat složitý graph propagation engine před základním trend detection.
+- [ ] Nedělat vlastní ML modely před ověřením hodnoty.
+- [ ] Nedělat enterprise role systém před prvním pilotem.
+- [ ] Nedělat perfektní UI před automatickými reporty.
 
 ---
 
-### 16.2 Přidat lepší NLP
+## 35. Doporučené pořadí práce
 
-Postupně přidat:
-
-- lepší sentiment,
-- entity-level sentiment,
-- topic clustering,
-- similarity search,
-- toxicitu,
-- risk classification,
-- LLM shrnutí trendů.
-
-Výsledek:
-
-- [ ] NLP vrstva je rozšiřitelná,
-- [ ] modely jsou verzované,
-- [ ] výsledky jsou auditovatelné.
-
----
-
-### 16.3 Přidat dashboard
-
-Dashboard řešit až ve chvíli, kdy existují data.
-
-První dashboard by měl ukazovat:
-
-- počet zmínek v čase,
-- top entity,
-- sentiment,
-- otevřené alerty,
-- nejrizikovější dokumenty,
-- zdroje zmínek.
-
-Výsledek:
-
-- [ ] dashboard čte existující agregovaná data,
-- [ ] nedělá těžké výpočty na klientovi,
-- [ ] respektuje tenant izolaci.
-
----
-
-### 16.4 Přidat reporty
-
-První report:
-
-```text
-Denní souhrn pro tenant_id
-```
-
-Obsah:
-
-- top zmínky,
-- nové alerty,
-- nejvíce rostoucí entity,
-- negativní témata,
-- doporučení ke kontrole.
-
-Výsledek:
-
-- [ ] report lze vygenerovat ručně,
-- [ ] report lze později posílat e-mailem,
-- [ ] report je stručný a použitelný.
-
----
-
-## Doporučené pořadí práce v nejbližších dnech
-
-### Den 1: Repo a konfigurace
-
-- [ ] upravit README,
-- [ ] vložit dokumentaci do `docs/`,
-- [ ] vytvořit `.env.example`,
-- [ ] zkontrolovat `.gitignore`,
-- [ ] zkontrolovat `src/config.py`,
-- [ ] zprovoznit logging,
-- [ ] ověřit `uv sync`, `ruff`, `pytest`.
-
----
-
-### Den 2: Databáze
-
-- [ ] založit Supabase projekt,
-- [ ] zapnout `pgcrypto`,
-- [ ] zapnout `vector`,
-- [ ] aplikovat minimální DDL,
-- [ ] vytvořit testovací tenant,
-- [ ] vytvořit databázového klienta,
-- [ ] ověřit připojení z lokální aplikace.
-
----
-
-### Den 3: První zdroj
-
-- [ ] vybrat první jednoduchý RSS zdroj,
-- [ ] zapsat ho do `docs/data_sources.md`,
-- [ ] vložit ho do `data_sources`,
-- [ ] implementovat RSS ingest,
-- [ ] vytvořit fixture test,
-- [ ] převést RSS položky na interní dokumenty.
-
----
-
-### Den 4: Transformace
-
-- [ ] normalizovat URL,
-- [ ] čistit text,
-- [ ] vytvořit content hash,
-- [ ] doplnit language code,
-- [ ] připravit dokumenty pro uložení,
-- [ ] otestovat deduplikaci.
-
----
-
-### Den 5: Load pipeline
-
-- [ ] vytvořit `collection_run`,
-- [ ] ukládat dokumenty do `raw_social_data`,
-- [ ] řešit duplicity,
-- [ ] zapisovat `processing_events`,
-- [ ] vytvořit první end-to-end běh.
-
----
-
-### Den 6: Entity
-
-- [ ] vložit první sledované entity,
-- [ ] přidat aliasy,
-- [ ] implementovat entity matching,
-- [ ] ukládat `document_entities`,
-- [ ] otestovat entity matching na reálných textech.
-
----
-
-### Den 7: Analýza a první alert
-
-- [ ] spočítat zmínky podle entity,
-- [ ] vytvořit první `trend_snapshot`,
-- [ ] přidat jednoduchý trend score,
-- [ ] vytvořit první alert rule,
-- [ ] uložit alert do tabulky `alerts`,
-- [ ] připravit jednoduchý výpis otevřených alertů.
-
----
-
-## Technický dluh, který neodkládat příliš dlouho
-
-- [ ] testy pro každou transformační funkci,
-- [ ] dokumentace každého datového zdroje,
-- [ ] jasná pravidla pro retry,
-- [ ] jasná pravidla pro deduplikaci,
-- [ ] RLS před frontendem,
-- [ ] audit secrets,
-- [ ] monitoring nákladů OpenAI/Apify/Modal,
-- [ ] jednoduché metriky úspěšnosti pipeline,
-- [ ] zálohy databáze,
-- [ ] changelog databázových změn.
-
----
-
-## Co zatím nedělat
-
-V první fázi nedělat:
-
-- složitý frontend,
-- billing,
-- kompletní SaaS administraci,
-- moc datových zdrojů najednou,
-- pokročilé mapování šíření,
-- složité grafové algoritmy,
-- perfektní sentiment model,
-- automatické LLM reporty pro vše,
-- drahé realtime zpracování,
-- sociální platformy bez jasného legálního přístupu.
-
-Důvod:
-
-Nejdřív musí vzniknout stabilní datové jádro. Bez něj budou dashboardy, alerty i analýzy nespolehlivé.
-
----
-
-## První skutečný milník
-
-První skutečný milník projektu:
-
-```text
-Jedním příkazem spustím pipeline, která stáhne veřejná data z jednoho zdroje, uloží je do databáze, najde sledované entity, vytvoří trendový snapshot a případně založí alert.
-```
-
-Ověřovací příkaz může být například:
-
-```powershell
-uv run python src/main.py full-run
-```
-
-Úspěšný výstup:
-
-```text
-collection_run: success
-fetched_count: 25
-inserted_count: 18
-duplicate_count: 7
-entities_matched: 12
-trend_snapshots_created: 5
-alerts_created: 1
-```
-
-Jakmile tento tok funguje, projekt má skutečný technický základ pro další rozvoj.
+1. [ ] Stabilizovat repo, config a dokumentaci.
+2. [ ] Nasadit databázové schéma do Supabase.
+3. [ ] Vytvořit load/repository vrstvu.
+4. [ ] Připravit Railway deployment.
+5. [ ] Připravit produkční job entrypointy.
+6. [ ] Nastavit Railway crony.
+7. [ ] Implementovat RSS ingest.
+8. [ ] Implementovat deduplikaci.
+9. [ ] Implementovat základní processing dokumentů.
+10. [ ] Implementovat entity alias matching.
+11. [ ] Implementovat základní sentiment/risk scoring.
+12. [ ] Implementovat trend snapshots.
+13. [ ] Implementovat alert rules.
+14. [ ] Implementovat denní report.
+15. [ ] Spustit systém na prvním tenantovi.
+16. [ ] Nechat běžet několik dní bez zásahu.
+17. [ ] Vyhodnotit kvalitu dat a skórování.
+18. [ ] Připravit ukázkový report.
+19. [ ] Oslovit první PR agenturu nebo testovacího klienta.
+20. [ ] Rozvíjet další funkce podle reálné zpětné vazby.
